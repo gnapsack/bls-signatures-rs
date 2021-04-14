@@ -33,7 +33,7 @@ const LAST_MULTIPLE_OF_FQ_MODULUS_LOWER_THAN_2_256: arith::U256 = arith::U256([
 
 use bn::{arith, pairing_batch, AffineG1, AffineG2, Fq, Fq2, Fr, Group, Gt, G1, G2};
 use byteorder::{BigEndian, ByteOrder};
-use digest::Digest;
+use sha3::Digest;
 
 pub mod error;
 use error::Error;
@@ -80,6 +80,12 @@ impl Bn256 {
         let point = G1::from_compressed(&v)?;
 
         Ok(point)
+    }
+
+    fn hash_to_g1(&self, message: &[u8]) -> G1 {
+        let h = &self.calculate_keccak256(&message);
+        let h = Fr::from_slice(&h[..]).expect("Guaranteed to succeed because size is 32");
+        G1::one() * h
     }
 
     /// Function to convert a `Hash(DATA|COUNTER)` to a point in the curve.
@@ -173,9 +179,27 @@ impl Bn256 {
     /// * The SHA256 digest as a slice.
     fn calculate_sha256(&self, bytes: &[u8]) -> [u8; 32] {
         let mut hasher = sha2::Sha256::new();
-        hasher.input(&bytes);
+        hasher.update(&bytes);
         let mut hash = [0; 32];
-        hash.copy_from_slice(&hasher.result());
+        hash.copy_from_slice(&hasher.finalize());
+
+        hash
+    }
+
+    /// Function to get the digest given some input data using Keccak256 algorithm.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - A slice containing the input data.
+    ///
+    /// # Returns
+    ///
+    /// * The Keccak256 digest as a slice.
+    fn calculate_keccak256(&self, bytes: &[u8]) -> [u8; 32] {
+        let mut hasher = sha3::Keccak256::new();
+        hasher.update(&bytes);
+        let mut hash = [0u8; 32];
+        hash.copy_from_slice(&hasher.finalize());
 
         hash
     }
@@ -346,6 +370,30 @@ impl MultiSignature<&[u8], &[u8], &[u8]> for Bn256 {
         self.to_compressed_g1(signature)
     }
 
+    /// Function to sign a message given a private key compatible with the Ethereum
+    /// implementation. Instead of TAI256, it uses a simple G1 multiplication to derive
+    /// the point corresponding to the message,
+    ///
+    /// # Arguments
+    ///
+    /// * `message`     - The message to be signed
+    /// * `secret_key`  - The secret key for signing
+    ///
+    /// # Returns
+    ///
+    /// * If successful, a vector of bytes with the signature
+    fn eth_sign(&mut self, secret_key: &[u8], message: &[u8]) -> Result<Vec<u8>, Self::Error> {
+        // 1. Hash_to_try_and_increment --> H(m) as point in G1 (only if it exists)
+        let hash_point = self.hash_to_g1(&message);
+
+        // 2. Multiply hash_point times secret_key --> Signature in G1
+        let sk = Fr::from_slice(&secret_key)?;
+        let signature = hash_point * sk;
+
+        // 3. Return signature as compressed bytes
+        self.to_compressed_g1(signature)
+    }
+
     /// Function to verify a signature (point in G1) given a public key (point in G2).
     ///
     /// # Arguments
@@ -366,6 +414,40 @@ impl MultiSignature<&[u8], &[u8], &[u8]> for Bn256 {
         let mut vals = Vec::new();
         // First pairing input: e(H(m), PubKey)
         let hash_point = self.hash_to_try_and_increment(&message)?;
+        let public_key_point = G2::from_compressed(&public_key)?;
+        vals.push((hash_point, public_key_point));
+        // Second pairing input:  e(-Signature,G2::one())
+        let signature_point = G1::from_compressed(&signature)?;
+        vals.push((signature_point, -G2::one()));
+        // Pairing batch with one negated point
+        let mul = pairing_batch(&vals);
+        if mul == Gt::one() {
+            Ok(())
+        } else {
+            Err(Error::VerificationFailed)
+        }
+    }
+
+    /// Function to verify a signature given a public key.
+    ///
+    /// # Arguments
+    ///
+    /// * `signature`   - The signature
+    /// * `message`     - The message to be signed
+    /// * `public_key`  - The public key to verify
+    ///
+    /// # Returns
+    ///
+    /// * If successful, `Ok(())`; otherwise `Error`
+    fn eth_verify(
+        &mut self,
+        signature: &[u8],
+        message: &[u8],
+        public_key: &[u8],
+    ) -> Result<(), Self::Error> {
+        let mut vals = Vec::new();
+        // First pairing input: e(H(m), PubKey)
+        let hash_point = self.hash_to_g1(&message);
         let public_key_point = G2::from_compressed(&public_key)?;
         vals.push((hash_point, public_key_point));
         // Second pairing input:  e(-Signature,G2::one())

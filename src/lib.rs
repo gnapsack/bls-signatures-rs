@@ -21,7 +21,7 @@ pub trait MultiSignature<PublicKey, SecretKey, Signature> {
     ///
     /// * If successful, a vector of bytes with the public key
     fn derive_public_key(&mut self, secret_key: SecretKey) -> Result<Vec<u8>, Self::Error>;
-
+    
     /// Function to sign a message given a private key.
     ///
     /// # Arguments
@@ -33,6 +33,20 @@ pub trait MultiSignature<PublicKey, SecretKey, Signature> {
     ///
     /// * If successful, a vector of bytes with the signature
     fn sign(&mut self, secret_key: SecretKey, message: &[u8]) -> Result<Vec<u8>, Self::Error>;
+
+    /// Function to sign a message given a private key compatible with the Ethereum
+    /// implementation. Instead of TAI256, it uses a simple G1 multiplication to derive
+    /// the point corresponding to the message,
+    ///
+    /// # Arguments
+    ///
+    /// * `message`     - The message to be signed
+    /// * `secret_key`  - The secret key for signing
+    ///
+    /// # Returns
+    ///
+    /// * If successful, a vector of bytes with the signature
+    fn eth_sign(&mut self, secret_key: SecretKey, message: &[u8]) -> Result<Vec<u8>, Self::Error>;
 
     /// Function to verify a signature given a public key.
     ///
@@ -46,6 +60,26 @@ pub trait MultiSignature<PublicKey, SecretKey, Signature> {
     ///
     /// * If successful, `Ok(())`; otherwise `Error`
     fn verify(
+        &mut self,
+        signature: Signature,
+        message: &[u8],
+        public_key: PublicKey,
+    ) -> Result<(), Self::Error>;
+
+    /// Function to verify a signature given a public key compatible with the Ethereum
+    /// implementation. Instead of TAI256, it uses a simple G1 multiplication to derive
+    /// the point corresponding to the message,
+    ///
+    /// # Arguments
+    ///
+    /// * `signature`   - The signature
+    /// * `message`     - The message to be signed
+    /// * `public_key`  - The public key to verify
+    ///
+    /// # Returns
+    ///
+    /// * If successful, `Ok(())`; otherwise `Error`
+    fn eth_verify(
         &mut self,
         signature: Signature,
         message: &[u8],
